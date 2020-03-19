@@ -461,86 +461,101 @@ function add_aio_ci(ci) {
  */
 function incr_relation_aio(page, page_size, last_update_time) {
 	try {
-		var relations = db.RELATION.find({
-			"dw_last_update_date" : {
-				"&gt" : last_update_time
-			}
-		}).sort({
-			"dw_last_update_date" : 1
-		}).limit(page_size).skip((page - 1) * page_size);
-
-		var failure_relations = [];
-		for (var i = 0; i < relations.length(); i++) {
-			var relation = relations[i];
-
-			var del_flag = relation.del_flag;
-			if (del_flag == 'Y') {
-				db.CIRELATION_AIO_TEST1.update({
-					$and : [ {
-						"link_list" : {
-							$in : [ relation.e_id ]
-						}
-					}, {
-						"link_list" : {
-							$in : [ relation.s_id ]
-						}
-					} ]
-				}, {
-					"$set" : {
-						"del_flag" : 'Y',
-						"dw_last_update_date" : (new Date()).valueOf()
+		
+		var last_id = 0;
+		
+		while(true){
+			var relations;
+			if(last_id == 0){
+				relations = db.RELATION.find({
+					"dw_last_update_date" : {
+						"$gt" : last_update_time
 					}
-				}, {
-					multi : true
-				});
-				var upLists = db.CIRELATION_AIO_TEST1.find({
-					"idList" : {
-						$in : [ relation.e_id, relation.s_id ]
+				}).sort({
+					"_id" : 1
+				}).limit(page_size);
+			}else{
+				relations = db.RELATION.find({
+					"dw_last_update_date" : {
+						"$gt" : last_update_time
 					},
-					"del_flag" : 'N'
-				});
-				for (var j = 0; j < upLists.length(); j++) {
-					var ci_type = relation.s_type;
-					if (ci_type == "Region") {
-						ci_type = 'DCArea';
-					}
-					var aio_ci = upLists[j];
-					var unsetJson = {};
-
-					var aio_num = aio_ci[ci_type].aio_num;
-
-					var new_has_type = [];
-					var new_idList = [];
-					var has_type = aio_ci.has_type;
-
-					for (var k = 0; k < has_type.length; k++) {
-						var in_type = aio_ci[has_type[k]];
-
-						var k_aio_num = in_type.aio_num;
-
-						if (aio_num <= k_aio_num) {
-							unsetJson[has_type[k]] = 1;
-						} else {
-							new_has_type.push(has_type[k]);
-							new_idList.push(in_type.id);
-						}
-
-					}
+					"_id":{"$gt":last_id}
+				}).sort({
+					"_id" : 1
+				}).limit(page_size);
+			}
+			for (var i = 0; i < relations.length(); i++) {
+				var relation = relations[i];
+				last_id = relation._id;
+				var del_flag = relation.del_flag;
+				if (del_flag == 'Y') {
 					db.CIRELATION_AIO_TEST1.update({
-						"id" : aio_ci.id
+						$and : [ {
+							"link_list" : {
+								$in : [ relation.e_id ]
+							}
+						}, {
+							"link_list" : {
+								$in : [ relation.s_id ]
+							}
+						} ]
 					}, {
 						"$set" : {
-							"dw_last_update_date" : (new Date()).valueOf(),
-							"idList" : new_idList,
-							"has_type" : new_has_type
-						},
-						"$unset" : unsetJson
+							"del_flag" : 'Y',
+							"dw_last_update_date" : (new Date()).valueOf()
+						}
 					}, {
 						multi : true
 					});
+					var upLists = db.CIRELATION_AIO_TEST1.find({
+						"idList" : {
+							$in : [ relation.e_id, relation.s_id ]
+						},
+						"del_flag" : 'N'
+					});
+					for (var j = 0; j < upLists.length(); j++) {
+						var ci_type = relation.s_type;
+						if (ci_type == "Region") {
+							ci_type = 'DCArea';
+						}
+						var aio_ci = upLists[j];
+						var unsetJson = {};
+
+						var aio_num = aio_ci[ci_type].aio_num;
+
+						var new_has_type = [];
+						var new_idList = [];
+						var has_type = aio_ci.has_type;
+
+						for (var k = 0; k < has_type.length; k++) {
+							var in_type = aio_ci[has_type[k]];
+
+							var k_aio_num = in_type.aio_num;
+
+							if (aio_num <= k_aio_num) {
+								unsetJson[has_type[k]] = 1;
+							} else {
+								new_has_type.push(has_type[k]);
+								new_idList.push(in_type.id);
+							}
+
+						}
+						db.CIRELATION_AIO_TEST1.update({
+							"id" : aio_ci.id
+						}, {
+							"$set" : {
+								"dw_last_update_date" : (new Date()).valueOf(),
+								"idList" : new_idList,
+								"has_type" : new_has_type
+							},
+							"$unset" : unsetJson
+						}, {
+							multi : true
+						});
+					}
+				} else {
+					add_aio_relation(relation);
 				}
-			} else {
-				add_aio_relation(relation);
 			}
 		}
 	} catch (err) {
@@ -580,10 +595,15 @@ function all_aio(page, page_size) {
 					"_id" : 1
 				}).limit(page_size);
 			}
-
+			
+			if(cis.length() < 1){
+				break;
+			}
+			
 			for (var i = 0; i < cis.length(); i++) {
 				var result_array = new Array();
 				var ci = cis[i];
+				last_id = ci._id;
 				var id = ci.id;
 				var level = 1;
 				var ci_list = [ id ];
@@ -629,166 +649,185 @@ function all_aio(page, page_size) {
  */
 function incr_ci_aio(page, page_size, last_update_time) {
 	try {
-		var cis = db.CI.find({
-			"dw_last_update_date" : {
-				"&gt" : last_update_time
-			}
-		}).sort({
-			"dw_last_update_date" : 1
-		}).limit(page_size).skip((page - 1) * page_size);
-
-		for (var i = 0; i < cis.length(); i++) {
-			var ci = cis[i];
-
-			var del_flag = ci.del_flag;
-
-			var aio_cis = db.CIRELATION_AIO_TEST1.find({
-				"idList" : {
-					$in : [ ci.id ]
-				}
-			});
-
-			var ci_type = ci.type;
-			if (ci_type == "Region") {
-				ci_type = 'DCArea';
-			}
-
-			if (del_flag == 'Y') {
-				for (var i = 0; i < aio_cis.length(); i++) {
-					var aio_ci = aio_cis[i];
-					var link_list = aio_ci.link_list;
-					var has_type = aio_ci.has_type;
-					var is_pass_ci = false;
-					for (var j = 0; j < link_list.length; j++) {
-						var aio_ci_id = link_list[j];
-						if (aio_ci_id == ci.id) {
-							is_pass_ci = true;
-							break;
-						}
+		var last_id = 0;
+		
+		while(true){
+			var cis;
+			if(last_id == 0){
+				cis = db.CI.find({
+					"dw_last_update_date" : {
+						"$gt" : last_update_time
 					}
-					if (is_pass_ci) {
-						db.CIRELATION_AIO_TEST1.update({
-							"id" : aio_ci.id
-						}, {
-							"$set" : {
-								"del_flag" : 'Y',
-								"dw_last_update_date" : (new Date()).valueOf()
-							}
-						}, {
-							multi : true
-						});
-					} else {
-						var unsetJson = {};
+				}).sort({
+					"_id" : 1
+				}).limit(page_size);
+			}else{
+				cis = db.CI.find({
+					"dw_last_update_date" : {
+						"$gt" : last_update_time
+					},
+					"_id":{"$gt":last_id}
+				}).sort({
+					"_id" : 1
+				}).limit(page_size);
+			}
+			if(cis.length() < 1){
+				break;
+			}
+			for (var i = 0; i < cis.length(); i++) {
+				var ci = cis[i];
+				last_id = ci._id;
+				var del_flag = ci.del_flag;
 
-						var aio_num = aio_ci[ci_type].aio_num;
-
-						var new_has_type = [];
-						var new_idList = [];
-
-						for (var k = 0; k < has_type.length; k++) {
-							var in_type = aio_ci[has_type[k]];
-
-							var k_aio_num = in_type.aio_num;
-
-							if (aio_num <= k_aio_num) {
-								unsetJson[has_type[k]] = 1;
-							} else {
-								new_has_type.push(has_type[k]);
-								new_idList.push(in_type.id);
-							}
-
-						}
-						db.CIRELATION_AIO_TEST1.update({
-							"id" : aio_ci.id
-						}, {
-							"$set" : {
-								"dw_last_update_date" : (new Date()).valueOf(),
-								"idList" : new_idList,
-								"has_type" : new_has_type
-							},
-							"$unset" : unsetJson
-						}, {
-							multi : true
-						});
+				var aio_cis = db.CIRELATION_AIO_TEST1.find({
+					"idList" : {
+						$in : [ ci.id ]
 					}
+				});
 
+				var ci_type = ci.type;
+				if (ci_type == "Region") {
+					ci_type = 'DCArea';
 				}
-			} else {
-				if (aio_cis.length() > 0) {
-					// 修改
-					for (var j = 0; j < aio_cis.length(); j++) {
-						var aio_ci = aio_cis[j];
-						var new_aio_ci = {};
-						var level = aio_ci.level;
-						var e_id = aio_ci.e_id;
-						var s_id = aio_ci.s_id;
-						var new_type = {
-							'name' : ci.name,
-							'name_en' : ci.name_en,
-							'name_cn' : ci.name_cn,
-							'type' : ci_type,
-							'id' : ci.id,
-							'subtype' : ci.subtype
-						};
 
-						if (e_id == ci.id && e_id == s_id) {
-							var e_type = aio_ci.e_type;
-							for ( var key in aio_ci) {
-								if (key.match(/^e_/) != 'e_'
-										&& key.match(/^s_/) != 's_') {
-									new_aio_ci[key] = aio_ci[key];
-								}
+				if (del_flag == 'Y') {
+					for (var i = 0; i < aio_cis.length(); i++) {
+						var aio_ci = aio_cis[i];
+						var link_list = aio_ci.link_list;
+						var has_type = aio_ci.has_type;
+						var is_pass_ci = false;
+						for (var j = 0; j < link_list.length; j++) {
+							var aio_ci_id = link_list[j];
+							if (aio_ci_id == ci.id) {
+								is_pass_ci = true;
+								break;
 							}
-							for ( var e_key in ci) {
-								if (e_key != '_id') {
-									new_aio_ci["e_" + e_key] = ci[e_key];
-									new_aio_ci["s_" + e_key] = ci[e_key];
+						}
+						if (is_pass_ci) {
+							db.CIRELATION_AIO_TEST1.update({
+								"id" : aio_ci.id
+							}, {
+								"$set" : {
+									"del_flag" : 'Y',
+									"dw_last_update_date" : (new Date()).valueOf()
 								}
-							}
-						} else if (ci.id == e_id) {
-							var e_type = aio_ci.e_type;
-							for ( var key in aio_ci) {
-								if (key.match(/^e_/) != 'e_') {
-									new_aio_ci[key] = aio_ci[key];
-								}
-							}
-							for ( var e_key in ci) {
-								if (e_key != '_id') {
-									new_aio_ci["e_" + e_key] = ci[e_key];
-								}
-							}
-						} else if (ci.id == s_id) {
-							for ( var key in aio_ci) {
-								if (key.match(/^s_/) != 's_') {
-									new_aio_ci[key] = aio_ci[key];
-								}
-							}
-							for ( var s_key in ci) {
-								if (s_key != '_id') {
-									new_aio_ci["s_" + s_key] = ci[s_key];
-								}
-							}
+							}, {
+								multi : true
+							});
 						} else {
-							new_aio_ci = aio_ci;
+							var unsetJson = {};
+
+							var aio_num = aio_ci[ci_type].aio_num;
+
+							var new_has_type = [];
+							var new_idList = [];
+
+							for (var k = 0; k < has_type.length; k++) {
+								var in_type = aio_ci[has_type[k]];
+
+								var k_aio_num = in_type.aio_num;
+
+								if (aio_num <= k_aio_num) {
+									unsetJson[has_type[k]] = 1;
+								} else {
+									new_has_type.push(has_type[k]);
+									new_idList.push(in_type.id);
+								}
+
+							}
+							db.CIRELATION_AIO_TEST1.update({
+								"id" : aio_ci.id
+							}, {
+								"$set" : {
+									"dw_last_update_date" : (new Date()).valueOf(),
+									"idList" : new_idList,
+									"has_type" : new_has_type
+								},
+								"$unset" : unsetJson
+							}, {
+								multi : true
+							});
 						}
 
-						new_aio_ci[ci_type] = new_type;
-
-						new_aio_ci['dw_last_update_date'] = (new Date())
-								.valueOf();
-						db.CIRELATION_AIO_TEST1.update({
-							'id' : aio_ci.id
-						}, new_aio_ci);
 					}
 				} else {
-					add_aio_ci(ci);
-				}
+					if (aio_cis.length() > 0) {
+						// 修改
+						for (var j = 0; j < aio_cis.length(); j++) {
+							var aio_ci = aio_cis[j];
+							var new_aio_ci = {};
+							var level = aio_ci.level;
+							var e_id = aio_ci.e_id;
+							var s_id = aio_ci.s_id;
+							var new_type = {
+								'name' : ci.name,
+								'name_en' : ci.name_en,
+								'name_cn' : ci.name_cn,
+								'type' : ci_type,
+								'id' : ci.id,
+								'subtype' : ci.subtype
+							};
 
+							if (e_id == ci.id && e_id == s_id) {
+								var e_type = aio_ci.e_type;
+								for ( var key in aio_ci) {
+									if (key.match(/^e_/) != 'e_'
+											&& key.match(/^s_/) != 's_') {
+										new_aio_ci[key] = aio_ci[key];
+									}
+								}
+								for ( var e_key in ci) {
+									if (e_key != '_id') {
+										new_aio_ci["e_" + e_key] = ci[e_key];
+										new_aio_ci["s_" + e_key] = ci[e_key];
+									}
+								}
+							} else if (ci.id == e_id) {
+								var e_type = aio_ci.e_type;
+								for ( var key in aio_ci) {
+									if (key.match(/^e_/) != 'e_') {
+										new_aio_ci[key] = aio_ci[key];
+									}
+								}
+								for ( var e_key in ci) {
+									if (e_key != '_id') {
+										new_aio_ci["e_" + e_key] = ci[e_key];
+									}
+								}
+							} else if (ci.id == s_id) {
+								for ( var key in aio_ci) {
+									if (key.match(/^s_/) != 's_') {
+										new_aio_ci[key] = aio_ci[key];
+									}
+								}
+								for ( var s_key in ci) {
+									if (s_key != '_id') {
+										new_aio_ci["s_" + s_key] = ci[s_key];
+									}
+								}
+							} else {
+								new_aio_ci = aio_ci;
+							}
+
+							new_aio_ci[ci_type] = new_type;
+
+							new_aio_ci['dw_last_update_date'] = (new Date())
+									.valueOf();
+							db.CIRELATION_AIO_TEST1.update({
+								'id' : aio_ci.id
+							}, new_aio_ci);
+						}
+					} else {
+						add_aio_ci(ci);
+					}
+
+				}
 			}
 		}
 	} catch (err) {
 		var failure_ci = {
 			"last_update_time" : last_update_time,
+			"current_time":(new Date()).valueOf(),
 			"err_msg" : err
 		}
 		return failure_ci;
