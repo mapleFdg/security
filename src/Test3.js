@@ -206,17 +206,29 @@ function aio_up_to_insert(ci, e_id, e_name, level, ci_list, s_e_idList,
  * @returns
  */
 function aio_down_to_insert(s_ci, s_id, level, ci_list, type_list,
-		result_array, link_list, is_first, type_has,in_to_db) {
-	var relations = db.RELATION.find({
-		"s_id" : s_id,
-		'del_flag' : 'N'
-	});
+		result_array, link_list, is_first, type_has,in_to_db,to_relations,op_type) {
+	var relations;
+	if(to_relations == undefined){
+		relations = db.RELATION.find({
+			"s_id" : s_id,
+			'del_flag' : 'N'
+		});
+	}else{
+		relations = to_relations;
+	}
 	if (relations.length() > 0) { // 未到顶层
 		for (var i = 0; i < relations.length(); i++) {
 			if (i != 0) { // 有多个上层，切另一分支以达顶层，重置result_array
 				result_array = new Array();
 			}
 			var relation = relations[i];
+			var e_type = relation.e_type;
+			if(op_type == 'ci'){
+				if(e_type != 'Rack' && e_type != 'Room' && e_type != 'DC' && e_type != 'Region'){
+					continue;
+				}
+				i = relations.length;
+			}
 			var e_id = relation.e_id;
 			var e_cis = db.CI.find({
 				'id' : e_id,
@@ -270,21 +282,23 @@ function aio_down_to_insert(s_ci, s_id, level, ci_list, type_list,
 				new_ci_list.push(e_id);
 				new_type_has.push(type);
 				new_link_list.push(e_id);
-				var result_json = {
-					's_ci' : s_ci,
-					'e_ci' : e_ci,
-					'relation' : relation,
-					'level' : level,
-					'link_list' : new_link_list
+				if(op_type != 'ci'){
+					var result_json = {
+						's_ci' : s_ci,
+						'e_ci' : e_ci,
+						'relation' : relation,
+						'level' : level,
+						'link_list' : new_link_list
+					}
+					result_array.push(result_json);
 				}
-				result_array.push(result_json);
 				if (level <= 20) {
 					// 继续递归
 					aio_down_to_insert(s_ci, e_id, level + 1, new_ci_list,
 							new_type_list, result_array, new_link_list,
-							is_first, new_type_has,in_to_db);
+							is_first, new_type_has,in_to_db,undefined,'ci');
 				}
-			} else { // CI被删除，关系未被删除
+			} else if(op_type != 'ci'){ // CI被删除，关系未被删除
 				if (is_first) { // 插入0层
 					insert_aio_data(s_ci, s_ci, undefined, ci_list, type_list,
 							0, [ s_ci.id ], type_has,in_to_db);
@@ -303,21 +317,21 @@ function aio_down_to_insert(s_ci, s_id, level, ci_list, type_list,
 				}
 			}
 		}
-	} else { // 到顶层或无关系的CI
-		if (is_first) { // 插入0层
-			insert_aio_data(s_ci, s_ci, undefined, ci_list, type_list, 0,
-					[ s_ci.id ], type_has,in_to_db);
-		}
-		if (result_array.length > 0) { // 顶层插入
-			for (var j = 0; j < result_array.length; j++) {
-				var r_e_ci = result_array[j].e_ci;
-				var r_s_ci = result_array[j].s_ci;
-				var r_relation = result_array[j].relation;
-				var level = result_array[j].level;
-				var r_link_list = result_array[j].link_list;
-				insert_aio_data(r_e_ci, r_s_ci, r_relation, ci_list, type_list,
-						level, r_link_list, type_has,in_to_db);
-			}
+	}
+	
+	if (is_first) { // 插入0层
+		insert_aio_data(s_ci, s_ci, undefined, ci_list, type_list, 0,
+				[ s_ci.id ], type_has,in_to_db);
+	}
+	if (result_array.length > 0) { // 顶层插入
+		for (var j = 0; j < result_array.length; j++) {
+			var r_e_ci = result_array[j].e_ci;
+			var r_s_ci = result_array[j].s_ci;
+			var r_relation = result_array[j].relation;
+			var level = result_array[j].level;
+			var r_link_list = result_array[j].link_list;
+			insert_aio_data(r_e_ci, r_s_ci, r_relation, ci_list, type_list,
+					level, r_link_list, type_has,in_to_db);
 		}
 	}
 }
@@ -569,13 +583,13 @@ function incr_relation_aio(page, page_size, last_update_time) {
 }
 
 /**
- * 全量
+ * 全量CI
  * 
  * @param page
  * @param page_size
  * @returns
  */
-function all_aio(page, page_size) {
+function all_aio_ci(page, page_size) {
 	try {
 		var last_id = 0;
 
@@ -631,7 +645,7 @@ function all_aio(page, page_size) {
 				};
 
 				aio_down_to_insert(ci, id, level, ci_list, type_list,
-						result_array, link_list, true, type_has,in_to_db);
+						result_array, link_list, true, type_has,in_to_db,undefined,'ci');
 			}
 		}
 	} catch (err) {
@@ -639,6 +653,77 @@ function all_aio(page, page_size) {
 			"err_msg" : err
 		}
 		return failure_ci;
+	}
+}
+
+/**
+ * 全量Relation
+ * 
+ * @returns
+ */
+function all_aio_relation(tenant_param,type_param,page_size){
+	try{
+		var last_id = 0;
+		
+		while(true){
+			var relations;
+			var find_filter;
+			var in_to_db = new Array();
+			if(last_id == 0){
+				find_filter = {
+						"_tenant":tenant_param,
+						"s_type":type_param,
+						"del_flag":'N'
+				};
+			}else{
+				find_filter = {
+						"_tenant":tenant_param,
+						"s_type":type_param,
+						"del_flag":'N',
+						"_id":last_id
+				};
+			}
+			relations = db.RELATION.find(find_filter).sort({"_id":1}).limit(page_size);
+			for(var i = 0;i < relations.length(); i++){
+				var relation = relations[i];
+				var s_id = relation.s_id;
+				var cis = db.CI.find({'id':s_id,'del_flag':'N'});
+				if(cis.length() < 1){
+					continue;
+				}
+				var ci = cis[0];
+				var e_id = relation.e_id;
+				var e_type = relation.e_type;
+				var s_type = relation.s_type;
+				
+				var level = 1;
+				var ci_list = [s_id];
+				var link_list = [s_id];
+				
+				var type_has = [s_type];
+				
+				var type_list = {};
+				
+				var result_array = new Array;
+				
+				type_list[s_type]={
+						'aio_num' : 1,
+						'id' : id,
+						'name' : ci.name,
+						'type' : ci.type,
+						'name_en' : ci.name_en,
+						'name_cn' : ci.name_cn,
+						'subtype' : ci.subtype
+				};				
+				aio_down_to_insert(ci, e_id, level, ci_list, type_list,
+						result_array, link_list, false, type_has,in_to_db,relation,'relation');
+			}
+		}
+	}catch(err){
+		var failure = {
+				"err_msg" : err
+		}
+		return failure;
 	}
 }
 
